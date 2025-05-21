@@ -396,7 +396,7 @@ int BPF_KRETPROBE(trace_recv_exit, int ret_val)
     cgroup_id = *cgroup_id_ptr;
     if(!cgroup_id) return 0;
 
-    __u64 *cost_counter_ptr;
+    volatile __u64 *cost_counter_ptr;
     cost_counter_ptr = bpf_map_lookup_elem(&cgroup_net_cost, &cgroup_id);
     if (!cost_counter_ptr) {
         bpf_printk("trace_recv_exit: Failed to find cost counter for cgroup id %llu\n", cgroup_id);
@@ -404,8 +404,7 @@ int BPF_KRETPROBE(trace_recv_exit, int ret_val)
     }
 
     //add the cost to local cgroup cost
-    (void)__sync_fetch_and_add(cost_counter_ptr, cost_ns);
-
+    *cost_counter_ptr += cost_ns;
     return 0;
 }
 
@@ -445,7 +444,7 @@ int BPF_KRETPROBE(trace_xmit_exit, int ret)
     __u64 now_end, swaptime_end, cumtime_end, end_cpu_time;
     struct sock *sk = NULL;
     __u64 cgroup_id = 0;
-    __u64 *cost_counter_ptr;
+    volatile __u64 *cost_counter_ptr;
 
     
     start_cpu_time_ptr = bpf_map_lookup_elem(&packet_cost_start_tx, &skb_key);
@@ -495,7 +494,7 @@ int BPF_KRETPROBE(trace_xmit_exit, int ret)
         return 0;
     }
 
-    (void)__sync_fetch_and_add(cost_counter_ptr, cost_ns);
+    *cost_counter_ptr += cost_ns;
 
     return 0;
 }
