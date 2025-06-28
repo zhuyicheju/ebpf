@@ -1,0 +1,89 @@
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 95a0d08f5..ef7e5c502 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -55,6 +55,45 @@
+ #include "stats.h"
+ #include "autogroup.h"
+ 
++#include <linux/sysctl.h>
++#include <linux/bpf.h> 
++
++static int dove_global_cost_map_fd = -1;
++
++static int dove_sysctl_handler(struct ctl_table *table, int write,
++                             void __user *buffer, size_t *lenp, loff_t *ppos)
++{
++    int ret = proc_dointvec(table, write, buffer, lenp, ppos);
++    if (ret || !write)
++        return ret;
++    
++    pr_info("DOVE: cgroup_global_cost map FD set to %d\n", dove_global_cost_map_fd);
++
++    return 0;
++}
++
++static struct ctl_table dove_sysctl_table[] = {
++    {
++        .procname       = "dove_global_cost_map_fd",
++        .data           = &dove_global_cost_map_fd,
++        .maxlen         = sizeof(int),
++        .mode           = 0644,
++        .proc_handler   = dove_sysctl_handler,
++    },
++    {}
++};
++
++static struct ctl_table_header *dove_sysctl_header;
++
++static int __init dove_sysctl_init(void)
++{
++    dove_sysctl_header = register_sysctl_table(dove_sysctl_table);
++    if (!dove_sysctl_header)
++        return -ENOMEM;
++    return 0;
++}
++late_initcall(dove_sysctl_init); 
++
+ /*
+  * The initial- and re-scaling of tunables is configurable
+  *
+@@ -5597,6 +5636,38 @@ static inline u64 sched_cfs_bandwidth_slice(void)
+ void __refill_cfs_bandwidth_runtime(struct cfs_bandwidth *cfs_b)
+ {
+ 	s64 runtime;
++	s64 cost_to_deduct = 0;
++
++    // DOVE project: Check if we have a valid map FD and try to read from it
++    if (dove_global_cost_map_fd >= 0) {
++        struct bpf_map *map;
++        u64 cgroup_id;
++        struct cgroup_gained *gained_val;
++		struct cgroup_gained zero_gained = {0};
++
++        map = bpf_map_get_from_fd(dove_global_cost_map_fd, BPF_MAP_GET_UNLOCKED);
++        if (IS_ERR(map)) {
++            // pr_warn_once("DOVE: Failed to get BPF map from FD %d\n", dove_global_cost_map_fd);
++        } else {
++            cgroup_id = cgroup_id(cfs_b->tg->css.cgroup);
++
++            gained_val = bpf_map_lookup_elem(map, &cgroup_id);
++            if (gained_val) {
++                cost_to_deduct = gained_val->net_cost;
++                
++                if (cost_to_deduct > 0) {
++        			bpf_map_update_elem(map, &cgroup_id, &zero_gained, BPF_ANY);
++    			}
++            }
++            bpf_map_put(map); 	
++        }
++    }
++    
++    if (cost_to_deduct > 0) {
++        cfs_b->runtime -= cost_to_deduct;
++        // pr_info("DOVE: Deducted %lld ns from cgroup %llu, runtime now %lld\n",
++        //         cost_to_deduct, cgroup_id(cfs_b->tg->css.cgroup), cfs_b->runtime);
++    }
+ 
+ 	if (unlikely(cfs_b->quota == RUNTIME_INF))
+ 		return;

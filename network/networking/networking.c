@@ -303,6 +303,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    int map_fd = bpf_map__fd(skel->maps.cgroup_global_cost);
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "sysctl -w dove_global_cost_map_fd=%d", map_fd);
+    system(cmd);
+
     // attach the BPF program to the kernel
     err = networking_bpf__attach(skel);
     if(err) {
